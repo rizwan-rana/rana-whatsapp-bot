@@ -2,7 +2,7 @@
 
 Auto-reply with GPT. Deploy to Railway, scan QR, go live.
 
-Run locally:
+### Run locally:
 ```bash
 npm install
 npm start
