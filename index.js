@@ -4,20 +4,16 @@ const axios = require('axios');
 const fs = require('fs');
 require('dotenv').config();
 
-// Load Baileys session from file
 const { state, saveState } = useSingleFileAuthState('./auth_info/session.json');
 
-// Main connection function
 async function connectToWhatsApp() {
     const sock = makeWASocket({
         auth: state,
         logger: require('pino')({ level: 'silent' }),
     });
 
-    // Save session updates
     sock.ev.on('creds.update', saveState);
 
-    // Connection closed handling
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
@@ -29,7 +25,6 @@ async function connectToWhatsApp() {
         }
     });
 
-    // Message listener
     sock.ev.on('messages.upsert', async (msg) => {
         const m = msg.messages[0];
         if (!m.message || m.key.fromMe) return;
@@ -46,7 +41,6 @@ async function connectToWhatsApp() {
     });
 }
 
-// GPT-3.5 reply function
 async function getGPTReply(message) {
     try {
         const res = await axios.post('https://api.openai.com/v1/chat/completions', {
@@ -69,5 +63,4 @@ async function getGPTReply(message) {
     }
 }
 
-// Start the bot
 connectToWhatsApp();
