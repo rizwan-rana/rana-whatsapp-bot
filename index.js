@@ -1,56 +1,64 @@
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require("@whiskeysockets/baileys");
 const P = require("pino");
-const qrcode = require("qrcode-terminal");
-const { Boom } = require("@hapi/boom");
-const fs = require("fs");
+const dotenv = require("dotenv");
 const axios = require("axios");
-require("dotenv").config();
 
-async function connectBot() {
-    const { state, saveCreds } = await useMultiFileAuthState("./auth_info_multi");
-    const { version } = await fetchLatestBaileysVersion();
-    const sock = makeWASocket({
-        version,
-        logger: P({ level: "silent" }),
-        auth: state,
-    });
+dotenv.config();
 
-    sock.ev.on("connection.update", ({ connection, qr }) => {
-        if (qr) qrcode.generate(qr, { small: true });
-        if (connection === "open") console.log("✅ WhatsApp Connected");
-    });
+async function connectToWhatsApp() {
+  const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
+  const sock = makeWASocket({
+    auth: state,
+    logger: P({ level: 'silent' }),
+    printQRInTerminal: true,
+  });
 
-    sock.ev.on("creds.update", saveCreds);
-
-    sock.ev.on("messages.upsert", async ({ messages }) => {
-        const msg = messages[0];
-        if (!msg.message || msg.key.fromMe) return;
-        const sender = msg.key.remoteJid;
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
-        console.log("📥 Received:", text);
-        if (text) {
-            const reply = await getGPTReply(text);
-            await sock.sendMessage(sender, { text: reply });
-        }
-    });
-}
-
-async function getGPTReply(message) {
-    try {
-        const res = await axios.post("https://api.openai.com/v1/chat/completions", {
-            model: "gpt-3.5-turbo",
-            messages: [{ role: "user", content: message }],
-        }, {
-            headers: {
-                "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
-                "Content-Type": "application/json"
-            }
-        });
-        return res.data.choices[0].message.content.trim();
-    } catch (err) {
-        console.error("GPT Error:", err.response?.data || err.message);
-        return "Sorry, I'm having trouble replying right now.";
+  sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
+    if (connection === "close") {
+      const reason = lastDisconnect?.error?.output?.statusCode;
+      console.log("Connection closed:", reason);
+    } else if (connection === "open") {
+      console.log("✅ WhatsApp connected!");
     }
+  });
+
+  sock.ev.on("messages.upsert", async ({ messages }) => {
+    if (!messages || !messages[0]?.message) return;
+
+    const msg = messages[0];
+    const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+
+    console.log("📩 New message:", text);
+
+    if (!text) return;
+
+    const reply = await getReply(text);
+
+    if (reply) {
+      await sock.sendMessage(msg.key.remoteJid, { text: reply });
+    }
+  });
+
+  async function getReply(message) {
+    try {
+      const res = await axios.post("https://api.openai.com/v1/chat/completions", {
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: message }],
+      }, {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      return res.data.choices[0].message.content.trim();
+    } catch (err) {
+      console.error("GPT error:", err?.response?.data || err.message);
+      return "Sorry, I'm having trouble replying right now.";
+    }
+  }
+
+  return sock;
 }
 
-connectBot();
+connectToWhatsApp();
