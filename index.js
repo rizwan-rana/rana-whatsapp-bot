@@ -1,52 +1,56 @@
-const express = require('express');
-const bodyParser = require('body-parser');
-const { MessagingResponse } = require('twilio').twiml;
-const { OpenAI } = require('openai');
-require('dotenv').config();
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
+const P = require("pino");
+const qrcode = require("qrcode-terminal");
+const { Boom } = require("@hapi/boom");
+const fs = require("fs");
+const axios = require("axios");
+require("dotenv").config();
 
-const app = express();
-const port = process.env.PORT || 8080;
-
-app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
-
-app.get('/', (req, res) => {
-  res.send('✅ WhatsApp Auto-Reply is active.');
-});
-
-app.post('/incoming', async (req, res) => {
-  const incomingMsg = req.body.Body?.trim();
-  const sender = req.body.From;
-  const twiml = new MessagingResponse();
-
-  console.log(`📥 Message from ${sender}: ${incomingMsg}`);
-
-  if (!incomingMsg) {
-    twiml.message("⚠️ Empty message received.");
-    return res.send(twiml.toString());
-  }
-
-  try {
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-    const gptResponse = await openai.chat.completions.create({
-      messages: [
-        { role: 'system', content: 'You are a helpful assistant. Reply in Roman Urdu.' },
-        { role: 'user', content: incomingMsg }
-      ],
-      model: 'gpt-4',
+async function connectBot() {
+    const { state, saveCreds } = await useMultiFileAuthState("./auth_info_multi");
+    const { version } = await fetchLatestBaileysVersion();
+    const sock = makeWASocket({
+        version,
+        logger: P({ level: "silent" }),
+        auth: state,
     });
 
-    const reply = gptResponse.choices[0].message.content.trim();
-    twiml.message(reply);
-  } catch (err) {
-    console.error("❌ OpenAI error:", err.message || err);
-    twiml.message("Sorry, kuch masla hua hai. Try again later.");
-  }
+    sock.ev.on("connection.update", ({ connection, qr }) => {
+        if (qr) qrcode.generate(qr, { small: true });
+        if (connection === "open") console.log("✅ WhatsApp Connected");
+    });
 
-  res.send(twiml.toString());
-});
+    sock.ev.on("creds.update", saveCreds);
 
-app.listen(port, () => {
-  console.log(`🚀 Server is running on port ${port}`);
-});
+    sock.ev.on("messages.upsert", async ({ messages }) => {
+        const msg = messages[0];
+        if (!msg.message || msg.key.fromMe) return;
+        const sender = msg.key.remoteJid;
+        const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
+        console.log("📥 Received:", text);
+        if (text) {
+            const reply = await getGPTReply(text);
+            await sock.sendMessage(sender, { text: reply });
+        }
+    });
+}
+
+async function getGPTReply(message) {
+    try {
+        const res = await axios.post("https://api.openai.com/v1/chat/completions", {
+            model: "gpt-3.5-turbo",
+            messages: [{ role: "user", content: message }],
+        }, {
+            headers: {
+                "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+                "Content-Type": "application/json"
+            }
+        });
+        return res.data.choices[0].message.content.trim();
+    } catch (err) {
+        console.error("GPT Error:", err.response?.data || err.message);
+        return "Sorry, I'm having trouble replying right now.";
+    }
+}
+
+connectBot();
