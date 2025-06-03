@@ -1,64 +1,53 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require("@whiskeysockets/baileys");
-const P = require("pino");
-const dotenv = require("dotenv");
-const axios = require("axios");
+const express = require('express');
+const bodyParser = require('body-parser');
+const { MessagingResponse } = require('twilio').twiml;
+const { OpenAI } = require('openai');
+require('dotenv').config();
 
-dotenv.config();
+const app = express();
+const port = process.env.PORT || 3000;
 
-async function connectToWhatsApp() {
-  const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
-  const sock = makeWASocket({
-    auth: state,
-    logger: P({ level: 'silent' }),
-    printQRInTerminal: true,
-  });
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(bodyParser.json());
 
-  sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
-    if (connection === "close") {
-      const reason = lastDisconnect?.error?.output?.statusCode;
-      console.log("Connection closed:", reason);
-    } else if (connection === "open") {
-      console.log("✅ WhatsApp connected!");
-    }
-  });
+// Health check
+app.get('/', (req, res) => {
+  res.send('✅ WhatsApp Auto-Reply is active.');
+});
 
-  sock.ev.on("messages.upsert", async ({ messages }) => {
-    if (!messages || !messages[0]?.message) return;
+// Incoming message handler
+app.post('/incoming', async (req, res) => {
+  const incomingMsg = req.body.Body?.trim();
+  const sender = req.body.From;
+  const twiml = new MessagingResponse();
 
-    const msg = messages[0];
-    const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
-
-    console.log("📩 New message:", text);
-
-    if (!text) return;
-
-    const reply = await getReply(text);
-
-    if (reply) {
-      await sock.sendMessage(msg.key.remoteJid, { text: reply });
-    }
-  });
-
-  async function getReply(message) {
-    try {
-      const res = await axios.post("https://api.openai.com/v1/chat/completions", {
-        model: "gpt-3.5-turbo",
-        messages: [{ role: "user", content: message }],
-      }, {
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      return res.data.choices[0].message.content.trim();
-    } catch (err) {
-      console.error("GPT error:", err?.response?.data || err.message);
-      return "Sorry, I'm having trouble replying right now.";
-    }
+  if (!incomingMsg) {
+    twiml.message("⚠️ Received an empty message.");
+    return res.send(twiml.toString());
   }
 
-  return sock;
-}
+  try {
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-connectToWhatsApp();
+    const gptResponse = await openai.chat.completions.create({
+      messages: [
+        { role: 'system', content: 'You are a helpful assistant who replies in Roman Urdu.' },
+        { role: 'user', content: incomingMsg }
+      ],
+      model: 'gpt-4',
+    });
+
+    const reply = gptResponse.choices[0].message.content.trim();
+    twiml.message(reply);
+  } catch (err) {
+    console.error('❌ Error from OpenAI or server:', err.message);
+    twiml.message("Sorry, system error aya hai. Try again shortly.");
+  }
+
+  res.send(twiml.toString());
+});
+
+// Start server
+app.listen(port, () => {
+  console.log(`🚀 Server is running on port ${port}`);
+})
