@@ -10,12 +10,10 @@ const port = process.env.PORT || 3000;
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-// Health check
 app.get('/', (req, res) => {
   res.send('✅ WhatsApp Auto-Reply is active.');
 });
 
-// Incoming message handler
 app.post('/incoming', async (req, res) => {
   const incomingMsg = req.body.Body?.trim();
   const sender = req.body.From;
@@ -47,7 +45,6 @@ app.post('/incoming', async (req, res) => {
   res.send(twiml.toString());
 });
 
-// Start server
 app.listen(port, () => {
   console.log(`🚀 Server is running on port ${port}`);
-})
+});
