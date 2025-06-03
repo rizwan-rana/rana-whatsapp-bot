@@ -19,6 +19,8 @@ app.post('/incoming', async (req, res) => {
   const sender = req.body.From;
   const twiml = new MessagingResponse();
 
+  console.log(`📥 Message from ${sender}: ${incomingMsg}`);
+
   if (!incomingMsg) {
     twiml.message("⚠️ Empty message received.");
     return res.send(twiml.toString());
@@ -29,7 +31,7 @@ app.post('/incoming', async (req, res) => {
 
     const gptResponse = await openai.chat.completions.create({
       messages: [
-        { role: 'system', content: 'You are a helpful assistant who replies in Roman Urdu.' },
+        { role: 'system', content: 'You are a helpful assistant. Reply in Roman Urdu.' },
         { role: 'user', content: incomingMsg }
       ],
       model: 'gpt-4',
@@ -38,8 +40,8 @@ app.post('/incoming', async (req, res) => {
     const reply = gptResponse.choices[0].message.content.trim();
     twiml.message(reply);
   } catch (err) {
-    console.error('❌ Error from OpenAI or server:', err.message);
-    twiml.message("Sorry, system error aya hai. Try again shortly.");
+    console.error("❌ OpenAI error:", err.message || err);
+    twiml.message("Sorry, kuch masla hua hai. Try again later.");
   }
 
   res.send(twiml.toString());
